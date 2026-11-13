@@ -1,0 +1,66 @@
+<!doctype html><meta charset="utf-8"><title>selftest</title><pre id="log">running</pre>
+<iframe id="app" src="../index.html" width="1560" height="1000"></iframe>
+<script type="module">
+// Browser self-test: open http://localhost:8056/test/browser.html and read the log.
+const log = []; const say = (...a) => { log.push(a.join(' ')); document.getElementById('log').textContent = log.join('\n'); };
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const fr = document.getElementById('app');
+await new Promise((r) => { fr.onload = r; if (fr.contentDocument && fr.contentDocument.readyState === 'complete') r(); });
+await wait(500);
+const w = fr.contentWindow, d = fr.contentDocument;
+w.addEventListener('error', (e) => say('PAGE ERROR', e.message));
+let bad = 0; const ok = (c, msg) => { if (!c) { bad++; say('FAIL', msg); } };
+try {
+  const { host, state } = w.gw;
+  const { PARAMS } = await import('../dsp/params.js');
+  const { FACTORY } = await import('../js/presets.js');
+  const lit = (sel) => d.querySelectorAll(sel).length;
+  const pe = (el, type, x, y) => el.dispatchEvent(new w.PointerEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0, pointerId: 77 }));
+  const center = (el) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+  const ctl = (id) => d.querySelector(`[data-ctl="${id}"]`);
+  const lcd = () => [...d.querySelectorAll('.lcd div')].map((e) => e.textContent).join(' / ');
+
+  const missing = PARAMS.filter((p) => !ctl(p.id) && !/\.table$/.test(p.id)).map((p) => p.id);
+  ok(!missing.length, 'parameters without a control: ' + missing.join(' '));
+  say('controls', d.querySelectorAll('[data-ctl]').length, 'of', PARAMS.length, 'parameters');
+
+  for (const [id, dy] of [['vcf.cut', -40], ['aenv.a', -30], ['seq.n3', -40], ['seq.bpm', 20]]) {
+    const k = ctl(id), [x, y] = center(k), v0 = host.getParam(id);
+    pe(k, 'pointerdown', x, y); pe(k, 'pointermove', x, y + dy); pe(k, 'pointerup', x, y + dy);
+    say(`drag ${id}: ${v0} -> ${+host.getParam(id).toFixed(3)}   [${lcd()}]`);
+    ok(host.getParam(id) !== v0, id + ' did not move');
+  }
+  for (const id of ['seq.g2', 'dl.sync', 'vcf.mode', 'm.mode']) {
+    const k = ctl(id), [x, y] = center(k), v0 = host.getParam(id);
+    pe(k, 'pointerdown', x, y - 8); pe(k, 'pointerup', x, y - 8);
+    say(`click ${id}: ${v0} -> ${host.getParam(id)}   [${lcd()}]`);
+    ok(host.getParam(id) !== v0, id + ' did not switch');
+  }
+  host.setParam('m.mode', 0);
+  d.querySelectorAll('.tsel button')[1].click();
+  say('table next ->', state.params['o1.table'], d.querySelector('.tsel span').textContent);
+  ok(state.params['o1.table'] === (FACTORY.find((p) => p.cat === 'Colchones').params['o1.table'] + 1), 'table button');
+
+  // audio thread: a held chord lights the voice LEDs; the sequencer moves the step LEDs
+  host.noteOn(60, 0.8); host.noteOn(64, 0.8); host.noteOn(67, 0.8);
+  await wait(500);
+  say('audio', w.document.getElementById('power').className, '· voice LEDs lit:', lit('.lamp.small.on'), '· keys down:', lit('.key.on'));
+  ok(lit('.lamp.small.on') === 3, 'expected 3 voices sounding');
+  host.noteOff(60); host.noteOff(64); host.noteOff(67);
+  const seen = new Set();
+  const space = (type) => w.dispatchEvent(new w.KeyboardEvent(type, { code: 'Space', bubbles: true }));
+  space('keydown'); space('keyup');
+  for (let i = 0; i < 30; i++) { await wait(60); const on = [...d.querySelectorAll('.sec .lamp:not(.small)')].findIndex((e) => e.classList.contains('on')); if (on >= 0) seen.add(on); }
+  say('sequencer running:', state.params['seq.run'], '· step LEDs seen:', [...seen].sort((a, b) => a - b).join(','));
+  ok(seen.size >= 8, 'sequencer LEDs did not move');
+  space('keydown');
+  ok(state.params['seq.run'] === 0, 'space did not stop the sequencer');
+
+  const sel = d.getElementById('preset');
+  for (let i = 0; i < FACTORY.length; i++) { sel.value = 'f' + i; sel.dispatchEvent(new w.Event('change')); await wait(120); host.setParam('seq.run', 0); }
+  say('loaded', FACTORY.length, 'factory patches; last:', lcd());
+  ok(state.name === FACTORY[FACTORY.length - 1].name, 'patch loading');
+} catch (e) { bad++; say('EXCEPTION', e.stack || e.message); }
+say(bad ? `${bad} FAILED` : 'all ok');
+document.title = 'done';
+</script>
